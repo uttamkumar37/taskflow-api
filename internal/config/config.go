@@ -20,11 +20,33 @@ type Config struct {
 	JWTSecret    string
 	JWTExpiresIn time.Duration
 
+	// RefreshTokenTTL controls how long a refresh token stays valid.
+	// Access tokens should be short-lived (minutes) precisely because
+	// refresh tokens exist to renew them without re-authenticating.
+	RefreshTokenTTL time.Duration
+
 	AllowedOrigins []string
 	RateLimitRPS   float64
 	RateLimitBurst int
 	RequestTimeout time.Duration
 	MaxBodyBytes   int64
+
+	// RedisAddr, if set, backs distributed rate limiting so multiple
+	// replicas share one accurate counter. Empty means "no Redis" — the
+	// service falls back to an in-memory, single-instance-only limiter,
+	// which is fine for local dev or a single-replica deployment.
+	RedisAddr string
+
+	// TracingEndpoint is the OTLP/HTTP collector to export spans to (e.g.
+	// Jaeger's OTLP receiver). Empty disables export — spans are still
+	// created (so instrumentation code never has to branch on this) but
+	// dropped instead of sent anywhere.
+	TracingEndpoint string
+
+	// ShutdownDrainDelay is how long the process waits, after flipping
+	// /readyz to "draining" but before actually calling srv.Shutdown, to
+	// give a load balancer time to notice and stop sending new traffic.
+	ShutdownDrainDelay time.Duration
 }
 
 type DBConfig struct {
@@ -62,18 +84,23 @@ func Load() (Config, error) {
 			Host:     getEnv("DB_HOST", "localhost"),
 			Port:     getEnv("DB_PORT", "5432"),
 			User:     getEnv("DB_USER", "taskflow"),
-			Password: getEnv("DB_PASSWORD", "taskflow"),
+			Password: getEnvOrFile("DB_PASSWORD", "taskflow"),
 			Name:     getEnv("DB_NAME", "taskflow"),
 			SSLMode:  getEnv("DB_SSLMODE", "disable"),
 		},
-		JWTSecret:    getEnv("JWT_SECRET", defaultJWTSecret),
-		JWTExpiresIn: getEnvDuration("JWT_EXPIRES_IN", 24*time.Hour),
+		JWTSecret:       getEnvOrFile("JWT_SECRET", defaultJWTSecret),
+		JWTExpiresIn:    getEnvDuration("JWT_EXPIRES_IN", 15*time.Minute),
+		RefreshTokenTTL: getEnvDuration("REFRESH_TOKEN_EXPIRES_IN", 720*time.Hour),
 
 		AllowedOrigins: getEnvList("CORS_ALLOWED_ORIGINS", []string{"*"}),
 		RateLimitRPS:   getEnvFloat("RATE_LIMIT_RPS", 5),
 		RateLimitBurst: int(getEnvFloat("RATE_LIMIT_BURST", 10)),
 		RequestTimeout: getEnvDuration("REQUEST_TIMEOUT", 15*time.Second),
 		MaxBodyBytes:   int64(getEnvFloat("MAX_BODY_BYTES", 1<<20)), // 1MB
+
+		RedisAddr:          getEnv("REDIS_ADDR", ""),
+		TracingEndpoint:    getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		ShutdownDrainDelay: getEnvDuration("SHUTDOWN_DRAIN_DELAY", 5*time.Second),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -114,6 +141,18 @@ func (c Config) validate() error {
 	if c.MaxBodyBytes <= 0 {
 		errs = append(errs, errors.New("MAX_BODY_BYTES must be positive"))
 	}
+	if c.JWTExpiresIn <= 0 {
+		errs = append(errs, errors.New("JWT_EXPIRES_IN must be positive"))
+	}
+	if c.RefreshTokenTTL <= 0 {
+		errs = append(errs, errors.New("REFRESH_TOKEN_EXPIRES_IN must be positive"))
+	}
+	if c.RefreshTokenTTL <= c.JWTExpiresIn {
+		errs = append(errs, errors.New("REFRESH_TOKEN_EXPIRES_IN must be longer than JWT_EXPIRES_IN"))
+	}
+	if c.ShutdownDrainDelay < 0 {
+		errs = append(errs, errors.New("SHUTDOWN_DRAIN_DELAY must not be negative"))
+	}
 
 	return errors.Join(errs...)
 }
@@ -123,6 +162,23 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// getEnvOrFile reads KEY, but prefers the contents of the file named by
+// KEY_FILE when that's set — the same convention the official
+// postgres/mysql Docker images use, so a Docker secret or a Kubernetes
+// Secret volume mount can supply this value as a file instead of a plain
+// environment variable (which shows up in `docker inspect`, `/proc/.../environ`,
+// and most process-listing tools).
+func getEnvOrFile(key, fallback string) string {
+	if path := os.Getenv(key + "_FILE"); path != "" {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return fallback
+		}
+		return strings.TrimSpace(string(contents))
+	}
+	return getEnv(key, fallback)
 }
 
 func getEnvDuration(key string, fallback time.Duration) time.Duration {

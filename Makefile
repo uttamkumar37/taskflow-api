@@ -1,4 +1,4 @@
-.PHONY: run test build up down logs lint fmt vet tidy coverage
+.PHONY: run test test-integration build up down logs lint fmt vet tidy coverage
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X taskflow/internal/version.Version=$(VERSION)
@@ -8,6 +8,11 @@ run:
 
 test:
 	go test ./... -v
+
+# Requires Docker: spins up real Postgres containers via testcontainers-go
+# and runs the repository layer against them (not in-memory fakes).
+test-integration:
+	go test -tags=integration ./... -v
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/api ./cmd/api

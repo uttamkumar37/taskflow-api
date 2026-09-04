@@ -21,6 +21,8 @@ func writeDomainError(w http.ResponseWriter, r *http.Request, err error) {
 		response.Error(w, r, http.StatusConflict, response.CodeAlreadyExists, err.Error())
 	case errors.Is(err, domain.ErrInvalidCredentials):
 		response.Error(w, r, http.StatusUnauthorized, response.CodeUnauthorized, err.Error())
+	case errors.Is(err, domain.ErrTokenInvalid):
+		response.Error(w, r, http.StatusUnauthorized, response.CodeUnauthorized, err.Error())
 	case errors.Is(err, domain.ErrForbidden):
 		response.Error(w, r, http.StatusForbidden, response.CodeForbidden, err.Error())
 	case errors.Is(err, domain.ErrValidation):

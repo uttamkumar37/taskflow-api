@@ -16,6 +16,26 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.63.0
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686" # UI: http://localhost:16686
+      - "4318:4318" # OTLP/HTTP receiver
+
   api:
     build:
       context: .
@@ -25,6 +45,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
     environment:
       ENV: ${ENV:-production}
       SERVER_PORT: "8080"
@@ -41,12 +65,21 @@ services:
       # enough to pass startup validation for ENV=production (which rejects
       # the short library default) — replace it before any real deployment.
       JWT_SECRET: ${JWT_SECRET:-compose-default-secret-change-me-before-deploying}
-      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-15m}
+      REFRESH_TOKEN_EXPIRES_IN: ${REFRESH_TOKEN_EXPIRES_IN:-720h}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
       RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-5}
       RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-10}
       REQUEST_TIMEOUT: ${REQUEST_TIMEOUT:-15s}
       MAX_BODY_BYTES: ${MAX_BODY_BYTES:-1048576}
+      SHUTDOWN_DRAIN_DELAY: ${SHUTDOWN_DRAIN_DELAY:-5s}
+      # Distributed rate limiting: shared across every replica instead of
+      # per-instance. Unset this to fall back to in-memory (single-instance
+      # only) rate limiting.
+      REDIS_ADDR: redis:6379
+      # Distributed tracing: exported to Jaeger's OTLP/HTTP receiver, viewable
+      # at http://localhost:16686. Unset this to disable tracing export.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
     ports:
       - "8080:8080"
     healthcheck:

@@ -34,9 +34,37 @@ func (r LoginRequest) Validate() error {
 	return nil
 }
 
+type RefreshRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
+func (r RefreshRequest) Validate() error {
+	if r.RefreshToken == "" {
+		return fmt.Errorf("%w: refresh_token is required", domain.ErrValidation)
+	}
+	return nil
+}
+
+type LogoutRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
+func (r LogoutRequest) Validate() error {
+	if r.RefreshToken == "" {
+		return fmt.Errorf("%w: refresh_token is required", domain.ErrValidation)
+	}
+	return nil
+}
+
 type AuthResponse struct {
-	Token string       `json:"token"`
-	User  UserResponse `json:"user"`
+	Token        string       `json:"token"`
+	RefreshToken string       `json:"refresh_token"`
+	User         UserResponse `json:"user"`
+}
+
+type TokenResponse struct {
+	Token        string `json:"token"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 type UserResponse struct {

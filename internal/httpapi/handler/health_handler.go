@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"taskflow/internal/httpapi/response"
@@ -27,8 +28,21 @@ func Health(version string) http.HandlerFunc {
 // from liveness) to decide whether to route traffic to this instance —
 // e.g. during startup, before migrations finish, or during a brief DB
 // failover, the process is alive but not yet ready.
-func Ready(db *sql.DB, version string) http.HandlerFunc {
+//
+// draining, when non-nil and true, short-circuits to "not ready" without
+// touching the DB — set the instant a shutdown signal is received, this is
+// what lets a load balancer stop sending new traffic here before
+// connections actually start getting cut.
+func Ready(db *sql.DB, version string, draining *atomic.Bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if draining != nil && draining.Load() {
+			response.JSON(w, http.StatusServiceUnavailable, map[string]string{
+				"status":  "draining",
+				"version": version,
+			})
+			return
+		}
+
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 

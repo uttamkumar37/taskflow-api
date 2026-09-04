@@ -10,8 +10,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 
 	"taskflow/internal/config"
 	"taskflow/internal/database"
@@ -19,6 +22,7 @@ import (
 	"taskflow/internal/logging"
 	"taskflow/internal/repository"
 	"taskflow/internal/service"
+	"taskflow/internal/tracing"
 	"taskflow/internal/version"
 )
 
@@ -41,6 +45,19 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	shutdownTracing, err := tracing.Init(ctx, "taskflow-api", version.Version, cfg.TracingEndpoint)
+	if err != nil {
+		slog.Error("failed to initialize tracing", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(shutdownCtx); err != nil {
+			slog.Error("failed to flush trace exporter", "error", err)
+		}
+	}()
+
 	db, err := database.Connect(ctx, cfg.DB.DSN())
 	if err != nil {
 		slog.Error("failed to connect to database", "error", err)
@@ -53,20 +70,34 @@ func main() {
 		os.Exit(1)
 	}
 
+	var redisClient *redis.Client
+	if cfg.RedisAddr != "" {
+		redisClient = redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
+		defer redisClient.Close()
+	}
+
 	// Dependency injection by hand: each layer only knows about the layer
 	// directly below it (handlers -> services -> repositories -> db), wired
 	// together once here at startup rather than via a DI framework.
 	userRepo := repository.NewUserRepository(db)
 	taskRepo := repository.NewTaskRepository(db)
+	refreshTokenRepo := repository.NewRefreshTokenRepository(db)
 
 	tokens := service.NewTokenManager(cfg.JWTSecret, cfg.JWTExpiresIn)
-	authService := service.NewAuthService(userRepo, tokens)
+	authService := service.NewAuthService(userRepo, refreshTokenRepo, tokens, cfg.RefreshTokenTTL)
 	taskService := service.NewTaskService(taskRepo)
 
-	router := httpapi.NewRouter(httpapi.Handlers{
-		Auth: authService,
-		Task: taskService,
-	}, tokens, db, cfg, version.Version)
+	var draining atomic.Bool
+
+	router := httpapi.NewRouter(httpapi.Deps{
+		Handlers:     httpapi.Handlers{Auth: authService, Task: taskService},
+		Tokens:       tokens,
+		DB:           db,
+		Config:       cfg,
+		BuildVersion: version.Version,
+		RedisClient:  redisClient,
+		Draining:     &draining,
+	})
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.ServerPort,
@@ -90,6 +121,15 @@ func main() {
 	// is what makes container restarts/deploys not lose requests.
 	<-ctx.Done()
 	slog.Info("shutdown signal received, draining connections")
+
+	// Flip readiness to "draining" immediately, then wait a beat before
+	// actually stopping — a load balancer or k8s Service needs to notice
+	// via /readyz (or the pod's own deregistration) and stop sending new
+	// traffic here before connections start getting cut.
+	draining.Store(true)
+	if cfg.ShutdownDrainDelay > 0 {
+		time.Sleep(cfg.ShutdownDrainDelay)
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

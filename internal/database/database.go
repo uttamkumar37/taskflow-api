@@ -12,6 +12,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/XSAM/otelsql"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 )
 
@@ -19,9 +20,16 @@ import (
 var migrationFiles embed.FS
 
 // Connect opens a pooled connection to Postgres, retrying for a bounded
-// window since the DB container may still be starting up.
+// window since the DB container may still be starting up. Every query and
+// exec on the returned *sql.DB is automatically wrapped in an OpenTelemetry
+// span via otelsql — no repository code needs to know tracing exists.
 func Connect(ctx context.Context, dsn string) (*sql.DB, error) {
-	db, err := sql.Open("pgx", dsn)
+	driverName, err := otelsql.Register("pgx")
+	if err != nil {
+		return nil, fmt.Errorf("register otel-instrumented driver: %w", err)
+	}
+
+	db, err := sql.Open(driverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}

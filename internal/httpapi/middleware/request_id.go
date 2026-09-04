@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"taskflow/internal/httpapi/reqctx"
 )
 
@@ -28,7 +30,17 @@ func RequestID(next http.Handler) http.Handler {
 		w.Header().Set(requestIDHeader, id)
 
 		ctx := reqctx.WithRequestID(r.Context(), id)
-		ctx = reqctx.WithLogger(ctx, slog.Default().With("request_id", id))
+
+		logger := slog.Default().With("request_id", id)
+		// otelhttp wraps the whole handler chain one layer further out, so
+		// a span already exists here — tagging every log line with its
+		// trace ID is what makes "grep this log line, then open the
+		// matching trace in Jaeger" possible.
+		if spanCtx := trace.SpanContextFromContext(ctx); spanCtx.HasTraceID() {
+			logger = logger.With("trace_id", spanCtx.TraceID().String())
+		}
+		ctx = reqctx.WithLogger(ctx, logger)
+
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

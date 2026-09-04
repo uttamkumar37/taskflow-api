@@ -112,6 +112,54 @@ func (r *memTaskRepo) Delete(_ context.Context, id int64) error {
 	return nil
 }
 
+type memRefreshTokenRepo struct {
+	byHash map[string]*domain.RefreshToken
+	nextID int64
+}
+
+func newMemRefreshTokenRepo() *memRefreshTokenRepo {
+	return &memRefreshTokenRepo{byHash: map[string]*domain.RefreshToken{}}
+}
+
+func (r *memRefreshTokenRepo) Create(_ context.Context, t *domain.RefreshToken) (*domain.RefreshToken, error) {
+	r.nextID++
+	t.ID = r.nextID
+	t.CreatedAt = time.Now()
+	stored := *t
+	r.byHash[t.TokenHash] = &stored
+	return &stored, nil
+}
+
+func (r *memRefreshTokenRepo) FindByHash(_ context.Context, hash string) (*domain.RefreshToken, error) {
+	t, ok := r.byHash[hash]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	found := *t
+	return &found, nil
+}
+
+func (r *memRefreshTokenRepo) Revoke(_ context.Context, id int64) error {
+	for _, t := range r.byHash {
+		if t.ID == id {
+			now := time.Now()
+			t.RevokedAt = &now
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (r *memRefreshTokenRepo) RevokeAllForUser(_ context.Context, userID int64) error {
+	now := time.Now()
+	for _, t := range r.byHash {
+		if t.UserID == userID && t.RevokedAt == nil {
+			t.RevokedAt = &now
+		}
+	}
+	return nil
+}
+
 // testConfig returns permissive operational settings (generous rate limit,
 // wide CORS) so tests exercise routing/business logic without tripping the
 // protective middleware — except TestRouter_RateLimiting, which deliberately
@@ -135,10 +183,21 @@ func newTestRouter() http.Handler {
 
 func newTestRouterWithConfig(cfg config.Config) http.Handler {
 	tokens := service.NewTokenManager("test-secret", time.Hour)
-	authSvc := service.NewAuthService(repository.UserRepository(newMemUserRepo()), tokens)
+	authSvc := service.NewAuthService(
+		repository.UserRepository(newMemUserRepo()),
+		repository.RefreshTokenRepository(newMemRefreshTokenRepo()),
+		tokens,
+		24*time.Hour,
+	)
 	taskSvc := service.NewTaskService(repository.TaskRepository(newMemTaskRepo()))
 
-	return NewRouter(Handlers{Auth: authSvc, Task: taskSvc}, tokens, nil, cfg, "test")
+	return NewRouter(Deps{
+		Handlers:     Handlers{Auth: authSvc, Task: taskSvc},
+		Tokens:       tokens,
+		DB:           nil,
+		Config:       cfg,
+		BuildVersion: "test",
+	})
 }
 
 func doJSON(t *testing.T, router http.Handler, method, path, token string, body any) *httptest.ResponseRecorder {
@@ -296,6 +355,85 @@ func TestRouter_ErrorEnvelope(t *testing.T) {
 	}
 	if headerID := rec.Header().Get("X-Request-ID"); headerID != body.RequestID {
 		t.Fatalf("expected body request_id %q to match X-Request-ID header %q", body.RequestID, headerID)
+	}
+}
+
+func TestRouter_AuthLifecycle_RefreshAndLogout(t *testing.T) {
+	router := newTestRouter()
+
+	signupRec := doJSON(t, router, "POST", "/api/v1/auth/signup", "", map[string]string{
+		"email": "lifecycle@example.com", "password": "password123",
+	})
+	if signupRec.Code != http.StatusCreated {
+		t.Fatalf("signup: expected 201, got %d: %s", signupRec.Code, signupRec.Body.String())
+	}
+	var tokens struct {
+		Token        string `json:"token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.Unmarshal(signupRec.Body.Bytes(), &tokens); err != nil {
+		t.Fatalf("decode signup response: %v", err)
+	}
+	if tokens.RefreshToken == "" {
+		t.Fatal("expected signup to return a refresh_token")
+	}
+
+	refreshRec := doJSON(t, router, "POST", "/api/v1/auth/refresh", "", map[string]string{
+		"refresh_token": tokens.RefreshToken,
+	})
+	if refreshRec.Code != http.StatusOK {
+		t.Fatalf("refresh: expected 200, got %d: %s", refreshRec.Code, refreshRec.Body.String())
+	}
+	var rotated struct {
+		Token        string `json:"token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.Unmarshal(refreshRec.Body.Bytes(), &rotated); err != nil {
+		t.Fatalf("decode refresh response: %v", err)
+	}
+	if rotated.RefreshToken == tokens.RefreshToken {
+		t.Fatal("expected refresh to rotate to a new refresh token")
+	}
+
+	// reusing the original (now-revoked) refresh token must fail...
+	reuseRec := doJSON(t, router, "POST", "/api/v1/auth/refresh", "", map[string]string{
+		"refresh_token": tokens.RefreshToken,
+	})
+	if reuseRec.Code != http.StatusUnauthorized {
+		t.Fatalf("reused refresh token: expected 401, got %d: %s", reuseRec.Code, reuseRec.Body.String())
+	}
+
+	// ...and reuse detection must have revoked the rotated token too.
+	afterReuseRec := doJSON(t, router, "POST", "/api/v1/auth/refresh", "", map[string]string{
+		"refresh_token": rotated.RefreshToken,
+	})
+	if afterReuseRec.Code != http.StatusUnauthorized {
+		t.Fatalf("rotated token after reuse detection: expected 401, got %d: %s", afterReuseRec.Code, afterReuseRec.Body.String())
+	}
+
+	// a fresh login + logout round trip should work cleanly
+	loginRec := doJSON(t, router, "POST", "/api/v1/auth/login", "", map[string]string{
+		"email": "lifecycle@example.com", "password": "password123",
+	})
+	var loginResp struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.Unmarshal(loginRec.Body.Bytes(), &loginResp); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+
+	logoutRec := doJSON(t, router, "POST", "/api/v1/auth/logout", "", map[string]string{
+		"refresh_token": loginResp.RefreshToken,
+	})
+	if logoutRec.Code != http.StatusNoContent {
+		t.Fatalf("logout: expected 204, got %d: %s", logoutRec.Code, logoutRec.Body.String())
+	}
+
+	postLogoutRec := doJSON(t, router, "POST", "/api/v1/auth/refresh", "", map[string]string{
+		"refresh_token": loginResp.RefreshToken,
+	})
+	if postLogoutRec.Code != http.StatusUnauthorized {
+		t.Fatalf("refresh after logout: expected 401, got %d: %s", postLogoutRec.Code, postLogoutRec.Body.String())
 	}
 }
 

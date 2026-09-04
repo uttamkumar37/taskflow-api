@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"time"
 
 	"taskflow/internal/domain"
 	"taskflow/internal/repository"
@@ -111,5 +112,56 @@ func (f *fakeTaskRepository) Delete(_ context.Context, id int64) error {
 		return domain.ErrNotFound
 	}
 	delete(f.byID, id)
+	return nil
+}
+
+// fakeRefreshTokenRepository is the in-memory stand-in for
+// repository.RefreshTokenRepository, keyed by hash the same way the real
+// Postgres table is (a unique index on token_hash).
+type fakeRefreshTokenRepository struct {
+	byHash map[string]*domain.RefreshToken
+	nextID int64
+}
+
+func newFakeRefreshTokenRepository() *fakeRefreshTokenRepository {
+	return &fakeRefreshTokenRepository{byHash: make(map[string]*domain.RefreshToken)}
+}
+
+func (f *fakeRefreshTokenRepository) Create(_ context.Context, t *domain.RefreshToken) (*domain.RefreshToken, error) {
+	f.nextID++
+	t.ID = f.nextID
+	t.CreatedAt = time.Now()
+	stored := *t
+	f.byHash[t.TokenHash] = &stored
+	return &stored, nil
+}
+
+func (f *fakeRefreshTokenRepository) FindByHash(_ context.Context, hash string) (*domain.RefreshToken, error) {
+	t, ok := f.byHash[hash]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	found := *t
+	return &found, nil
+}
+
+func (f *fakeRefreshTokenRepository) Revoke(_ context.Context, id int64) error {
+	for _, t := range f.byHash {
+		if t.ID == id {
+			now := time.Now()
+			t.RevokedAt = &now
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (f *fakeRefreshTokenRepository) RevokeAllForUser(_ context.Context, userID int64) error {
+	now := time.Now()
+	for _, t := range f.byHash {
+		if t.UserID == userID && t.RevokedAt == nil {
+			t.RevokedAt = &now
+		}
+	}
 	return nil
 }

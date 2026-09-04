@@ -102,6 +102,20 @@ local run. Once it's up:
 - API: `http://localhost:8080`
 - Jaeger UI (distributed traces): `http://localhost:16686`
 
+### Seeding dummy data
+
+```bash
+make seed
+# or: go run ./cmd/seed
+```
+
+Creates 3 users (`alice@example.com` / `bob@example.com` / `carol@example.com`,
+password `password123` for all) with 5 tasks each spanning every status
+(`pending`/`in_progress`/`done`), some with due dates. It goes through the
+same `AuthService`/`TaskService` code the real API uses — not raw SQL —
+so passwords are properly bcrypt-hashed. Safe to re-run: it looks up
+users/tasks that already exist instead of failing or duplicating them.
+
 ### Option B — locally against a Postgres you already have running
 
 ```bash

@@ -1,10 +1,15 @@
-.PHONY: run test test-integration build up down logs lint fmt vet tidy coverage
+.PHONY: run seed test test-integration build up down logs lint fmt vet tidy coverage
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X taskflow/internal/version.Version=$(VERSION)
 
 run:
 	go run -ldflags "$(LDFLAGS)" ./cmd/api
+
+# Populates the DB with a few dummy users and tasks for local dev/demoing.
+# Safe to re-run — existing users/tasks are detected and skipped.
+seed:
+	go run ./cmd/seed
 
 test:
 	go test ./... -v

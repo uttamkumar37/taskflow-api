@@ -20,17 +20,17 @@ func NewAuthHandler(auth *service.AuthService) *AuthHandler {
 func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 	var req dto.SignupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.Error(w, http.StatusBadRequest, "invalid request body")
+		response.Error(w, r, http.StatusBadRequest, response.CodeBadRequest, "invalid request body")
 		return
 	}
 	if err := req.Validate(); err != nil {
-		response.Error(w, http.StatusBadRequest, err.Error())
+		response.Error(w, r, http.StatusBadRequest, response.CodeValidation, err.Error())
 		return
 	}
 
 	user, token, err := h.auth.Signup(r.Context(), req.Email, req.Password)
 	if err != nil {
-		writeDomainError(w, err)
+		writeDomainError(w, r, err)
 		return
 	}
 
@@ -43,17 +43,17 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req dto.LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.Error(w, http.StatusBadRequest, "invalid request body")
+		response.Error(w, r, http.StatusBadRequest, response.CodeBadRequest, "invalid request body")
 		return
 	}
 	if err := req.Validate(); err != nil {
-		response.Error(w, http.StatusBadRequest, err.Error())
+		response.Error(w, r, http.StatusBadRequest, response.CodeValidation, err.Error())
 		return
 	}
 
 	user, token, err := h.auth.Login(r.Context(), req.Email, req.Password)
 	if err != nil {
-		writeDomainError(w, err)
+		writeDomainError(w, r, err)
 		return
 	}
 

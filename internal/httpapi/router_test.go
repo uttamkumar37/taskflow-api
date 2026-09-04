@@ -138,7 +138,7 @@ func newTestRouterWithConfig(cfg config.Config) http.Handler {
 	authSvc := service.NewAuthService(repository.UserRepository(newMemUserRepo()), tokens)
 	taskSvc := service.NewTaskService(repository.TaskRepository(newMemTaskRepo()))
 
-	return NewRouter(Handlers{Auth: authSvc, Task: taskSvc}, tokens, nil, cfg)
+	return NewRouter(Handlers{Auth: authSvc, Task: taskSvc}, tokens, nil, cfg, "test")
 }
 
 func doJSON(t *testing.T, router http.Handler, method, path, token string, body any) *httptest.ResponseRecorder {
@@ -258,6 +258,44 @@ func TestRouter_RateLimiting(t *testing.T) {
 
 	if lastCode != http.StatusTooManyRequests {
 		t.Fatalf("expected rate limiting to eventually return 429, got %d", lastCode)
+	}
+}
+
+func TestRouter_ErrorEnvelope(t *testing.T) {
+	router := newTestRouter()
+
+	signupRec := doJSON(t, router, "POST", "/api/v1/auth/signup", "", map[string]string{
+		"email": "envelope-test@example.com", "password": "password123",
+	})
+	var signupResp struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(signupRec.Body.Bytes(), &signupResp); err != nil {
+		t.Fatalf("decode signup response: %v", err)
+	}
+
+	rec := doJSON(t, router, "GET", "/api/v1/tasks/999999", signupResp.Token, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Error     string `json:"error"`
+		Code      string `json:"code"`
+		RequestID string `json:"request_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+
+	if body.Code != "NOT_FOUND" {
+		t.Fatalf("expected code NOT_FOUND, got %q", body.Code)
+	}
+	if body.RequestID == "" {
+		t.Fatalf("expected a non-empty request_id in the error body")
+	}
+	if headerID := rec.Header().Get("X-Request-ID"); headerID != body.RequestID {
+		t.Fatalf("expected body request_id %q to match X-Request-ID header %q", body.RequestID, headerID)
 	}
 }
 

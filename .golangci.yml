@@ -1,0 +1,26 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - unused
+    - ineffassign
+    - revive
+    - misspell
+    - bodyclose
+    - noctx
+    - unconvert
+
+  # gosec is deliberately not enabled: this codebase builds parameterized
+  # SQL with fmt.Sprintf for placeholder positions (never for values) and
+  # gosec's default ruleset flags that shape of code heavily without
+  # per-rule tuning. Revisit once the ruleset is tuned for this repo rather
+  # than shipping a noisy baseline.
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

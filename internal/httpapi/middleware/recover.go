@@ -1,9 +1,9 @@
 package middleware
 
 import (
-	"log/slog"
 	"net/http"
 
+	"taskflow/internal/httpapi/reqctx"
 	"taskflow/internal/httpapi/response"
 )
 
@@ -14,8 +14,8 @@ func Recover(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				slog.Error("panic recovered", "request_id", RequestIDFromContext(r.Context()), "error", rec, "path", r.URL.Path)
-				response.Error(w, http.StatusInternalServerError, "internal server error")
+				reqctx.Logger(r.Context()).Error("panic recovered", "error", rec, "path", r.URL.Path)
+				response.Error(w, r, http.StatusInternalServerError, response.CodeInternal, "internal server error")
 			}
 		}()
 		next.ServeHTTP(w, r)

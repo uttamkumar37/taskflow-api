@@ -20,8 +20,11 @@ internal/
     handler/             HTTP handlers (parse request -> call service -> write response)
     middleware/          request ID, logging, panic recovery, JWT auth, CORS, rate limiting, timeouts, metrics
     dto/                 request/response JSON shapes + validation
-    response/            consistent JSON response helpers
+    response/            consistent JSON response helpers (error envelope: message + code + request_id)
+    reqctx/              request-scoped context helpers (request ID, pre-tagged logger)
     router.go             route table
+  logging/               process-wide structured logger construction (level, JSON/text)
+  version/               build version, injected via -ldflags
 ```
 
 Request flow: `router -> middleware -> handler -> service -> repository -> Postgres`.
@@ -41,7 +44,12 @@ in-memory fakes and no real database.
 | Versioned REST routing (`/api/v1`), no 3rd-party router | [internal/httpapi/router.go](internal/httpapi/router.go) |
 | Middleware chaining, layered per route tier | [internal/httpapi/middleware/chain.go](internal/httpapi/middleware/chain.go), [router.go](internal/httpapi/router.go) |
 | Request tracing (`X-Request-ID` correlation) | [internal/httpapi/middleware/request_id.go](internal/httpapi/middleware/request_id.go) |
-| Structured logging (`log/slog`), JSON in prod / text in dev | [internal/httpapi/middleware/logging.go](internal/httpapi/middleware/logging.go), [cmd/api/main.go](cmd/api/main.go) |
+| Structured, leveled logging (`log/slog`), JSON in prod / text in dev, configurable `LOG_LEVEL` | [internal/logging/logging.go](internal/logging/logging.go), [internal/httpapi/middleware/logging.go](internal/httpapi/middleware/logging.go) |
+| Request-scoped logger (every log line in the request path carries `request_id`, including 500s and panics) | [internal/httpapi/reqctx/reqctx.go](internal/httpapi/reqctx/reqctx.go) |
+| Consistent error envelope (`error` + machine-readable `code` + `request_id`) | [internal/httpapi/response/response.go](internal/httpapi/response/response.go) |
+| Fail-fast config validation (refuses to start in prod with an unsafe JWT secret or invalid limits) | [internal/config/config.go](internal/config/config.go) |
+| Build version surfaced in `/healthz`/`/readyz`/logs | [internal/version/version.go](internal/version/version.go) |
+| Security headers (nosniff, frame-deny, no-referrer, CORP) | [internal/httpapi/middleware/security_headers.go](internal/httpapi/middleware/security_headers.go) |
 | Panic recovery | [internal/httpapi/middleware/recover.go](internal/httpapi/middleware/recover.go) |
 | Per-IP rate limiting (token bucket) | [internal/httpapi/middleware/ratelimit.go](internal/httpapi/middleware/ratelimit.go) |
 | CORS for cross-origin clients | [internal/httpapi/middleware/cors.go](internal/httpapi/middleware/cors.go) |
@@ -71,7 +79,10 @@ docker compose up --build
 
 This starts Postgres and the API together, with a container healthcheck on
 the API. The API waits for Postgres to report healthy, then runs migrations
-automatically on boot.
+automatically on boot. `docker-compose.yml` reads secrets/config from a
+git-ignored `.env` file in this directory if one exists (`cp .env.example
+.env` and edit it) — override `JWT_SECRET` there for anything beyond a
+throwaway local run.
 
 ### Option B — locally against a Postgres you already have running
 
@@ -86,6 +97,15 @@ go run ./cmd/api
 ```bash
 go test ./... -v
 # or: make test
+```
+
+### Development checks
+
+```bash
+make fmt   # gofmt
+make vet   # go vet
+make lint  # golangci-lint — install: https://golangci-lint.run/welcome/install/
+make coverage
 ```
 
 ## API reference
@@ -149,12 +169,23 @@ curl -s localhost:8080/metrics | head
   are rejected.
 - **Request tracing**: every response carries an `X-Request-ID` header
   (echoing one you send, or a generated one), and every log line for that
-  request includes `request_id` — grep logs by it to follow one request
-  through the system.
+  request — at any layer, via `reqctx.Logger(ctx)` — includes `request_id`,
+  so you can grep logs by it to follow one request through the system.
+- **Error responses** are a consistent envelope:
+  `{"error": "resource not found", "code": "NOT_FOUND", "request_id": "..."}`.
+  `code` is the stable, machine-readable value to branch on; `error` is a
+  human-readable message that may change wording; `request_id` matches the
+  `X-Request-ID` response header, for support/debugging correlation.
+- **Access logs are leveled by outcome**: 5xx → `Error`, 4xx → `Warn`,
+  everything else → `Info`, so log-based alerting can filter on level alone.
+  Set `LOG_LEVEL=debug` for verbose local debugging (adds source file:line).
+- **Config validation is fail-fast**: with `ENV=production`, the process
+  refuses to start if `JWT_SECRET` is the default value, shorter than 32
+  characters, or if any rate-limit/timeout/body-size setting is non-positive.
 - **Liveness vs. readiness**: `/healthz` never touches the DB (so
   orchestrators don't restart a healthy process just because Postgres
   blipped); `/readyz` does, and is what should gate traffic/load-balancer
-  routing.
+  routing. Both report the running build's `version`.
 
 ## Suggested next steps to deepen your understanding
 
@@ -178,3 +209,10 @@ curl -s localhost:8080/metrics | head
    production split.
 7. **Wire `/metrics` into Prometheus + Grafana** locally to see the RED
    metrics (rate, errors, duration) this service already exposes, graphed.
+8. **Add a CI pipeline** (lint, vet, test, `govulncheck`, Docker build) and
+   an OpenAPI spec — deliberately left out of this hardening pass to keep it
+   to Go code + repo hygiene, but the natural next layer.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Licensed under [MIT](LICENSE).

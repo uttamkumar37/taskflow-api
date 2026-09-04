@@ -16,21 +16,27 @@ import (
 	"taskflow/internal/config"
 	"taskflow/internal/database"
 	"taskflow/internal/httpapi"
+	"taskflow/internal/logging"
 	"taskflow/internal/repository"
 	"taskflow/internal/service"
+	"taskflow/internal/version"
 )
 
 func main() {
-	cfg := config.Load()
-
-	// JSON logs in production are what log aggregators (Loki, CloudWatch,
-	// Datadog) expect; a human-readable text handler is friendlier for local
-	// development, where a person is reading the terminal directly.
-	if cfg.Env == "production" {
-		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
-	} else {
-		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
+	cfg, err := config.Load()
+	if err != nil {
+		// The real logger isn't built yet (it depends on cfg), so fall back
+		// to a minimal one just for this fatal message.
+		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("invalid configuration", "error", err)
+		os.Exit(1)
 	}
+
+	logger := logging.New(cfg.Env, cfg.LogLevel).With(
+		"service", "taskflow-api",
+		"env", cfg.Env,
+		"version", version.Version,
+	)
+	slog.SetDefault(logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -60,14 +66,15 @@ func main() {
 	router := httpapi.NewRouter(httpapi.Handlers{
 		Auth: authService,
 		Task: taskService,
-	}, tokens, db, cfg)
+	}, tokens, db, cfg, version.Version)
 
 	srv := &http.Server{
-		Addr:         ":" + cfg.ServerPort,
-		Handler:      router,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              ":" + cfg.ServerPort,
+		Handler:           router,
+		ReadTimeout:       10 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second, // mitigates slow-header (slowloris) attacks
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	go func() {

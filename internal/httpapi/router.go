@@ -33,11 +33,11 @@ type Handlers struct {
 // Both tiers share request ID tagging, access logging, panic recovery, and
 // metrics, applied once at the outermost layer so every response is
 // accounted for exactly once.
-func NewRouter(h Handlers, tokens *service.TokenManager, db *sql.DB, cfg config.Config) http.Handler {
+func NewRouter(h Handlers, tokens *service.TokenManager, db *sql.DB, cfg config.Config, buildVersion string) http.Handler {
 	root := http.NewServeMux()
 
-	root.HandleFunc("GET /healthz", handler.Health)
-	root.Handle("GET /readyz", handler.Ready(db))
+	root.Handle("GET /healthz", handler.Health(buildVersion))
+	root.Handle("GET /readyz", handler.Ready(db, buildVersion))
 	root.Handle("GET /metrics", promhttp.Handler())
 
 	authHandler := handler.NewAuthHandler(h.Auth)
@@ -76,5 +76,6 @@ func NewRouter(h Handlers, tokens *service.TokenManager, db *sql.DB, cfg config.
 		middleware.Logging,
 		middleware.Recover,
 		middleware.Metrics,
+		middleware.SecurityHeaders,
 	)(root)
 }

@@ -4,6 +4,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 type Config struct {
 	Env          string
 	ServerPort   string
+	LogLevel     string
 	DB           DBConfig
 	JWTSecret    string
 	JWTExpiresIn time.Duration
@@ -41,12 +43,21 @@ func (d DBConfig) DSN() string {
 	)
 }
 
+// defaultJWTSecret is the value shipped in .env.example for local dev. It
+// must never be used in production — Load rejects it there.
+const defaultJWTSecret = "dev-secret-change-me"
+
 // Load reads configuration from environment variables, falling back to
-// sane local-dev defaults so `go run` works without a .env file.
-func Load() Config {
-	return Config{
+// sane local-dev defaults so `go run` works without a .env file, then
+// validates the result. Validation failures should stop the process from
+// starting rather than let it run with settings that would be unsafe
+// (a well-known JWT secret in production) or nonsensical (a zero or
+// negative rate limit) in production.
+func Load() (Config, error) {
+	cfg := Config{
 		Env:        getEnv("ENV", "development"),
 		ServerPort: getEnv("SERVER_PORT", "8080"),
+		LogLevel:   getEnv("LOG_LEVEL", "info"),
 		DB: DBConfig{
 			Host:     getEnv("DB_HOST", "localhost"),
 			Port:     getEnv("DB_PORT", "5432"),
@@ -55,7 +66,7 @@ func Load() Config {
 			Name:     getEnv("DB_NAME", "taskflow"),
 			SSLMode:  getEnv("DB_SSLMODE", "disable"),
 		},
-		JWTSecret:    getEnv("JWT_SECRET", "dev-secret-change-me"),
+		JWTSecret:    getEnv("JWT_SECRET", defaultJWTSecret),
 		JWTExpiresIn: getEnvDuration("JWT_EXPIRES_IN", 24*time.Hour),
 
 		AllowedOrigins: getEnvList("CORS_ALLOWED_ORIGINS", []string{"*"}),
@@ -64,6 +75,47 @@ func Load() Config {
 		RequestTimeout: getEnvDuration("REQUEST_TIMEOUT", 15*time.Second),
 		MaxBodyBytes:   int64(getEnvFloat("MAX_BODY_BYTES", 1<<20)), // 1MB
 	}
+
+	if err := cfg.validate(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func (c Config) validate() error {
+	var errs []error
+
+	if c.ServerPort == "" {
+		errs = append(errs, errors.New("SERVER_PORT must not be empty"))
+	}
+	if c.DB.Host == "" || c.DB.Port == "" || c.DB.User == "" || c.DB.Name == "" {
+		errs = append(errs, errors.New("DB_HOST, DB_PORT, DB_USER, and DB_NAME must not be empty"))
+	}
+	if c.JWTSecret == "" {
+		errs = append(errs, errors.New("JWT_SECRET must not be empty"))
+	}
+	if c.Env == "production" {
+		if c.JWTSecret == defaultJWTSecret {
+			errs = append(errs, errors.New("JWT_SECRET must be overridden from its default value in production"))
+		}
+		if len(c.JWTSecret) < 32 {
+			errs = append(errs, errors.New("JWT_SECRET must be at least 32 characters in production"))
+		}
+	}
+	if c.RateLimitRPS <= 0 {
+		errs = append(errs, errors.New("RATE_LIMIT_RPS must be positive"))
+	}
+	if c.RateLimitBurst <= 0 {
+		errs = append(errs, errors.New("RATE_LIMIT_BURST must be positive"))
+	}
+	if c.RequestTimeout <= 0 {
+		errs = append(errs, errors.New("REQUEST_TIMEOUT must be positive"))
+	}
+	if c.MaxBodyBytes <= 0 {
+		errs = append(errs, errors.New("MAX_BODY_BYTES must be positive"))
+	}
+
+	return errors.Join(errs...)
 }
 
 func getEnv(key, fallback string) string {

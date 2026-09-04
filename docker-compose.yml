@@ -3,41 +3,50 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: taskflow
-      POSTGRES_PASSWORD: taskflow
-      POSTGRES_DB: taskflow
+      POSTGRES_USER: ${DB_USER:-taskflow}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-taskflow}
+      POSTGRES_DB: ${DB_NAME:-taskflow}
     ports:
       - "5432:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U taskflow"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-taskflow}"]
       interval: 5s
       timeout: 5s
       retries: 10
 
   api:
-    build: .
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
     restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
     environment:
-      ENV: production
+      ENV: ${ENV:-production}
       SERVER_PORT: "8080"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       DB_HOST: db
       DB_PORT: "5432"
-      DB_USER: taskflow
-      DB_PASSWORD: taskflow
-      DB_NAME: taskflow
+      DB_USER: ${DB_USER:-taskflow}
+      DB_PASSWORD: ${DB_PASSWORD:-taskflow}
+      DB_NAME: ${DB_NAME:-taskflow}
       DB_SSLMODE: disable
-      JWT_SECRET: dev-secret-change-me
-      JWT_EXPIRES_IN: 24h
-      CORS_ALLOWED_ORIGINS: "*"
-      RATE_LIMIT_RPS: "5"
-      RATE_LIMIT_BURST: "10"
-      REQUEST_TIMEOUT: 15s
-      MAX_BODY_BYTES: "1048576"
+      # Override JWT_SECRET (and any of the above) via a git-ignored .env
+      # file in this directory — docker compose loads it automatically —
+      # rather than editing this file. The placeholder below is only long
+      # enough to pass startup validation for ENV=production (which rejects
+      # the short library default) — replace it before any real deployment.
+      JWT_SECRET: ${JWT_SECRET:-compose-default-secret-change-me-before-deploying}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
+      RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-5}
+      RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-10}
+      REQUEST_TIMEOUT: ${REQUEST_TIMEOUT:-15s}
+      MAX_BODY_BYTES: ${MAX_BODY_BYTES:-1048576}
     ports:
       - "8080:8080"
     healthcheck:

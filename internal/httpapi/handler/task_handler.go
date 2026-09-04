@@ -27,7 +27,7 @@ func NewTaskHandler(tasks *service.TaskService) *TaskHandler {
 func currentUserID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	userID, ok := middleware.UserIDFromContext(r.Context())
 	if !ok {
-		response.Error(w, http.StatusInternalServerError, "internal server error")
+		response.Error(w, r, http.StatusInternalServerError, response.CodeInternal, "internal server error")
 		return 0, false
 	}
 	return userID, true
@@ -41,17 +41,17 @@ func (h *TaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	var req dto.TaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.Error(w, http.StatusBadRequest, "invalid request body")
+		response.Error(w, r, http.StatusBadRequest, response.CodeBadRequest, "invalid request body")
 		return
 	}
 	if err := req.Validate(); err != nil {
-		response.Error(w, http.StatusBadRequest, err.Error())
+		response.Error(w, r, http.StatusBadRequest, response.CodeValidation, err.Error())
 		return
 	}
 
 	task, err := h.tasks.Create(r.Context(), userID, req.Title, req.Description, req.DueDate)
 	if err != nil {
-		writeDomainError(w, err)
+		writeDomainError(w, r, err)
 		return
 	}
 
@@ -66,7 +66,7 @@ func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	status := domain.TaskStatus(r.URL.Query().Get("status"))
 	if status != "" && !status.Valid() {
-		response.Error(w, http.StatusBadRequest, "invalid status filter")
+		response.Error(w, r, http.StatusBadRequest, response.CodeValidation, "invalid status filter")
 		return
 	}
 
@@ -75,7 +75,7 @@ func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	tasks, total, effLimit, effOffset, err := h.tasks.List(r.Context(), userID, status, limit, offset)
 	if err != nil {
-		writeDomainError(w, err)
+		writeDomainError(w, r, err)
 		return
 	}
 
@@ -90,13 +90,13 @@ func (h *TaskHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	taskID, err := parseTaskID(r)
 	if err != nil {
-		response.Error(w, http.StatusBadRequest, "invalid task id")
+		response.Error(w, r, http.StatusBadRequest, response.CodeBadRequest, "invalid task id")
 		return
 	}
 
 	task, err := h.tasks.Get(r.Context(), userID, taskID)
 	if err != nil {
-		writeDomainError(w, err)
+		writeDomainError(w, r, err)
 		return
 	}
 
@@ -111,17 +111,17 @@ func (h *TaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	taskID, err := parseTaskID(r)
 	if err != nil {
-		response.Error(w, http.StatusBadRequest, "invalid task id")
+		response.Error(w, r, http.StatusBadRequest, response.CodeBadRequest, "invalid task id")
 		return
 	}
 
 	var req dto.TaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.Error(w, http.StatusBadRequest, "invalid request body")
+		response.Error(w, r, http.StatusBadRequest, response.CodeBadRequest, "invalid request body")
 		return
 	}
 	if err := req.Validate(); err != nil {
-		response.Error(w, http.StatusBadRequest, err.Error())
+		response.Error(w, r, http.StatusBadRequest, response.CodeValidation, err.Error())
 		return
 	}
 	status := domain.TaskStatus(req.Status)
@@ -131,7 +131,7 @@ func (h *TaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	task, err := h.tasks.Update(r.Context(), userID, taskID, req.Title, req.Description, status, req.DueDate)
 	if err != nil {
-		writeDomainError(w, err)
+		writeDomainError(w, r, err)
 		return
 	}
 
@@ -146,12 +146,12 @@ func (h *TaskHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	taskID, err := parseTaskID(r)
 	if err != nil {
-		response.Error(w, http.StatusBadRequest, "invalid task id")
+		response.Error(w, r, http.StatusBadRequest, response.CodeBadRequest, "invalid task id")
 		return
 	}
 
 	if err := h.tasks.Delete(r.Context(), userID, taskID); err != nil {
-		writeDomainError(w, err)
+		writeDomainError(w, r, err)
 		return
 	}
 

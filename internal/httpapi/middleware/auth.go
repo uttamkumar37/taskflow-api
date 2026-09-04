@@ -26,13 +26,13 @@ func Auth(tokens *service.TokenManager) func(http.Handler) http.Handler {
 			header := r.Header.Get("Authorization")
 			parts := strings.SplitN(header, " ", 2)
 			if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-				response.Error(w, http.StatusUnauthorized, "missing or malformed Authorization header")
+				response.Error(w, r, http.StatusUnauthorized, response.CodeUnauthorized, "missing or malformed Authorization header")
 				return
 			}
 
 			userID, err := tokens.Validate(parts[1])
 			if err != nil {
-				response.Error(w, http.StatusUnauthorized, "invalid or expired token")
+				response.Error(w, r, http.StatusUnauthorized, response.CodeUnauthorized, "invalid or expired token")
 				return
 			}
 

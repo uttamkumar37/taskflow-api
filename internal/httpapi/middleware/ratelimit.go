@@ -41,7 +41,10 @@ func NewRateLimiter(rps float64, burst int) *RateLimiter {
 // cleanupLoop evicts limiters for IPs that haven't been seen in a while, so
 // this map doesn't grow forever under a service with many distinct clients.
 func (rl *RateLimiter) cleanupLoop() {
-	for range time.Tick(time.Minute) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
 		rl.mu.Lock()
 		for ip, v := range rl.visitors {
 			if time.Since(v.lastSeen) > 3*time.Minute {
@@ -69,7 +72,7 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
 		if !rl.allow(ip) {
-			response.Error(w, http.StatusTooManyRequests, "rate limit exceeded, slow down")
+			response.Error(w, r, http.StatusTooManyRequests, response.CodeRateLimited, "rate limit exceeded, slow down")
 			return
 		}
 		next.ServeHTTP(w, r)

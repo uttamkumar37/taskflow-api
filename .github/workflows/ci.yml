@@ -21,21 +21,17 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-      - uses: golangci/golangci-lint-action@v6
-        with:
-          # `.golangci.yml` uses the v2 config schema (top-level `version`,
-          # `formatters`, `linters.default`) — golangci-lint-action's
-          # `version: latest` resolves to the latest v1.x, which rejects
-          # that schema outright ("additional properties ... not allowed").
-          # Pin to a real v2 release explicitly instead.
-          version: v2.13.2
-          # golangci-lint's prebuilt binaries lag the newest Go releases and
-          # refuse to lint a module targeting a Go language version newer
-          # than the one they were built with (a real failure hit on the
-          # first CI run against go.mod's `go 1.26.6`). Building from source
-          # with the toolchain actions/setup-go just installed sidesteps
-          # that version skew entirely.
-          install-mode: goinstall
+      # golangci-lint-action's own install modes don't handle this
+      # cleanly: "binary" downloads the latest v1.x release, which rejects
+      # .golangci.yml's v2 config schema outright, and its "goinstall" mode
+      # is hardcoded to the v1 module import path (no v2.x tags exist
+      # there — v2 lives under .../v2/cmd/golangci-lint). Installing it
+      # ourselves, the same way verified locally, sidesteps both issues and
+      # also avoids the prebuilt-binary-vs-go.mod Go-version mismatch that
+      # hit v1's binary on the first CI run (this always builds with
+      # whichever Go version actions/setup-go just installed).
+      - run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+      - run: golangci-lint run ./...
 
   test:
     name: Unit tests

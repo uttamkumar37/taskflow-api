@@ -92,7 +92,7 @@ func (r *taskRepository) ListByUser(ctx context.Context, userID int64, params Li
 	if err != nil {
 		return nil, 0, fmt.Errorf("list tasks: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var tasks []domain.Task
 	for rows.Next() {

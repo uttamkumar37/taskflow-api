@@ -63,7 +63,7 @@ func main() {
 		slog.Error("failed to connect to database", "error", err)
 		os.Exit(1)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if err := database.Migrate(ctx, db); err != nil {
 		slog.Error("failed to run migrations", "error", err)
@@ -73,7 +73,7 @@ func main() {
 	var redisClient *redis.Client
 	if cfg.RedisAddr != "" {
 		redisClient = redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
-		defer redisClient.Close()
+		defer func() { _ = redisClient.Close() }()
 	}
 
 	// Dependency injection by hand: each layer only knows about the layer

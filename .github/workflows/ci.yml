@@ -23,13 +23,18 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
       - uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
-          # golangci-lint's prebuilt binary lags the newest Go releases and
-          # refuses to lint a module targeting a Go language version newer
-          # than the one it was built with (a real failure hit on the first
-          # CI run against go.mod's `go 1.26.6`). Building from source with
-          # the toolchain actions/setup-go just installed sidesteps that
-          # version skew entirely.
+          # `.golangci.yml` uses the v2 config schema (top-level `version`,
+          # `formatters`, `linters.default`) — golangci-lint-action's
+          # `version: latest` resolves to the latest v1.x, which rejects
+          # that schema outright ("additional properties ... not allowed").
+          # Pin to a real v2 release explicitly instead.
+          version: v2.13.2
+          # golangci-lint's prebuilt binaries lag the newest Go releases and
+          # refuse to lint a module targeting a Go language version newer
+          # than the one they were built with (a real failure hit on the
+          # first CI run against go.mod's `go 1.26.6`). Building from source
+          # with the toolchain actions/setup-go just installed sidesteps
+          # that version skew entirely.
           install-mode: goinstall
 
   test:

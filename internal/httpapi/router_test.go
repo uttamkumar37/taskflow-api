@@ -288,7 +288,9 @@ func TestRouter_TaskLifecycle(t *testing.T) {
 	var signup2Resp struct {
 		Token string `json:"token"`
 	}
-	json.Unmarshal(signup2Rec.Body.Bytes(), &signup2Resp)
+	if err := json.Unmarshal(signup2Rec.Body.Bytes(), &signup2Resp); err != nil {
+		t.Fatalf("decode second signup response: %v", err)
+	}
 
 	forbiddenPath := "/api/v1/tasks/" + strconv.FormatInt(task.ID, 10)
 	if rec := doJSON(t, router, "GET", forbiddenPath, signup2Resp.Token, nil); rec.Code != http.StatusForbidden {

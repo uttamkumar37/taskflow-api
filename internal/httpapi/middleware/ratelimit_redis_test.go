@@ -18,7 +18,7 @@ func newTestRedisBackend(t *testing.T, burst int) *redisBackend {
 	t.Cleanup(mr.Close)
 
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { client.Close() })
+	t.Cleanup(func() { _ = client.Close() })
 
 	return newRedisBackend(client, burst)
 }

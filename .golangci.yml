@@ -8,17 +8,31 @@ linters:
     - errcheck
     - unused
     - ineffassign
-    - revive
     - misspell
     - bodyclose
     - noctx
     - unconvert
 
+  # revive is deliberately not enabled: its default ruleset mandates a doc
+  # comment on every exported identifier, which is the opposite of this
+  # project's established style (self-documenting names; comments only for
+  # non-obvious WHY, per CONTRIBUTING.md). staticcheck + govet already cover
+  # this repo's real static-analysis needs without that noise.
+  #
   # gosec is deliberately not enabled: this codebase builds parameterized
   # SQL with fmt.Sprintf for placeholder positions (never for values) and
   # gosec's default ruleset flags that shape of code heavily without
   # per-rule tuning. Revisit once the ruleset is tuned for this repo rather
   # than shipping a noisy baseline.
+
+  exclusions:
+    rules:
+      # httptest.NewRequest (no context) is the standard, ubiquitous way to
+      # build a request in Go test code; NewRequestWithContext buys nothing
+      # in a test that doesn't need cancellation.
+      - path: _test\.go
+        linters:
+          - noctx
 
 formatters:
   enable:

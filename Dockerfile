@@ -17,7 +17,7 @@ RUN CGO_ENABLED=0 go build -ldflags "-X taskflow/internal/version.Version=${VERS
 # --- runtime stage ---
 # A minimal image: no Go toolchain, no shell utilities beyond what's needed —
 # smaller attack surface and a much smaller image to ship.
-FROM alpine:3.20
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates \
     && addgroup -S app && adduser -S app -G app
